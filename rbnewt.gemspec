@@ -1,7 +1,7 @@
 # coding: utf-8
 Gem::Specification.new do |spec|
   spec.name          = "rbnewt"
-  spec.version       = "0.0.1"
+  spec.version       = "0.0.2"
   spec.authors       = ["Hiroyasu OHYAMA"]
   spec.email         = ["user.localhost2000@gmail.com"]
 
@@ -10,6 +10,6 @@ Gem::Specification.new do |spec|
   spec.homepage      = "https://github.com/userlocalhost2000/rbnewt"
   spec.license       = "MIT"
 
-  spec.files         = Dir['{Makefile, *.c}']
   spec.extensions    = 'extconf.rb'
+  spec.files         = Dir['Makefile'] + Dir['*.c']
 end
