@@ -9,6 +9,6 @@ describe Newt do
     expect(@session).not_to be nil
   end
   it 'cloud close stomp session' do
-    expect(@session.close).not_to be nil
+    expect(@session.send('/queue/hoge', 'body')).not_to be nil
   end
 end

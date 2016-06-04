@@ -1,15 +1,12 @@
 #include <stomp/stomp.h>
+
+#include <newt/rbnewt.h>
 #include <newt/common.h>
 #include <newt/stomp.h>
-#include <pthread.h>
 
-static void *thread_stomp(void *data) {
-  stomp_session_t *session = (stomp_session_t *)data;
-
+void cnewt_stomp_start(stomp_session_t *session) {
   //here is main-loop
   stomp_run(session);
-
-  stomp_session_free(session);
 }
 
 int cnewt_stomp_initialize(stomp_session_t *session, char *server, char *port, char *userid, char *passwd) {
@@ -18,29 +15,14 @@ int cnewt_stomp_initialize(stomp_session_t *session, char *server, char *port, c
     {"passcode", passwd},
   };
   int ret = RET_ERROR;
-  pthread_t *thread_id = (pthread_t *)session->ctx;
+  rbnewt_context_t *context = (rbnewt_context_t *)session->ctx;
 
-  if(thread_id != NULL) {
+  if(context != NULL) {
     stomp_connect(session, server, port, 2, connection_headers);
 
-    pthread_create(thread_id, NULL, thread_stomp, session);
-
-    ret = RET_SUCCESS;
-  }
-
-  return ret;
-}
-
-int cnewt_stomp_close(stomp_session_t *session) {
-  pthread_t *thread_id = (pthread_t *)session->ctx;
-  const struct stomp_hdr disconnect_header[] = {{0}};
-  int ret = RET_ERROR;
-
-  if(thread_id != NULL) {
-    // clear run flag to escape stomp mainloop
-    session->run = 0;
-
-    pthread_join(*thread_id, NULL);
+    stomp_callback_set(session, SCB_CONNECTED, newt_stomp_callback_connected);
+    stomp_callback_set(session, SCB_MESSAGE, newt_stomp_callback_message);
+    stomp_callback_set(session, SCB_ERROR, newt_stomp_callback_error);
 
     ret = RET_SUCCESS;
   }
