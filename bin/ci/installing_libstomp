@@ -1,0 +1,12 @@
+#!/bin/sh
+
+wget https://github.com/userlocalhost2000/libstomp/archive/master.zip
+if [ -e "master.zip" ]
+then
+  unzip master.zip
+  cd libstomp-master
+  autoreconf -i
+  ./configure
+  make
+  sudo make install
+fi

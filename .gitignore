@@ -5,3 +5,4 @@
 pkg
 Makefile
 *.log
+Gemfile.lock

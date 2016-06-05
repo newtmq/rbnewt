@@ -1,0 +1,19 @@
+language: ruby
+cache: bundler
+before_script:
+  - './bin/ci/installing_libstomp'
+  - './bin/ci/setting_rabbitmq-stomp'
+  - './bin/ci/installing_rbnewt'
+script: "rspec"
+env:
+  - LD_LIBRARY_PATH=/usr/local/lib
+rvm:
+  - "2.2.2"
+notifications:
+  email: user.localhost2000@gmail.com
+services:
+  - rabbitmq
+branches:
+  only:
+    - master
+sudo: required

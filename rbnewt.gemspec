@@ -12,4 +12,7 @@ Gem::Specification.new do |spec|
 
   spec.extensions    = 'extconf.rb'
   spec.files         = Dir['Makefile', 'src/*.c', 'include/newt/*.h']
+
+  spec.add_runtime_dependency "rspec", "~> 3.4.0"
+  spec.add_runtime_dependency "rake", "~> 10.0"
 end
