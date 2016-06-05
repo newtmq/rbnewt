@@ -6,7 +6,7 @@
 
 /* internal data structure to share in the session */
 typedef struct rbnewt_context_t {
-  VALUE self;
+  VALUE callback_obj;
 } rbnewt_context_t;
 
 void newt_stomp_callback_connected(stomp_session_t *, void *, void *);
