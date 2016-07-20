@@ -13,8 +13,8 @@ end
 
 def is_library?
   is_ok = true
-  is_ok &= have_library('stomp', 'stomp_session_new') ||
-    find_library('stomp', 'stomp_session_new', '/opt/local/lib', '/usr/local/lib', '/usr/lib')
+  is_ok &= have_library('stomp', 'stomp_init') ||
+    find_library('stomp', 'stomp_init', '/opt/local/lib', '/usr/local/lib', '/usr/lib')
   is_ok &= have_library('pthread', 'pthread_create') ||
     find_library('pthread', 'pthread_create', '/opt/local/lib', '/usr/local/lib', '/usr/lib')
 end

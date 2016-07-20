@@ -1,39 +1,22 @@
 #include <ruby/ruby.h>
 #include <ruby/intern.h>
+
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <stomp/connection.h>
+#include <stomp/common.h>
 #include <stomp/stomp.h>
+#include <stomp/frame.h>
 
-#include <newt/stomp.h>
 #include <newt/rbnewt.h>
+#include <newt/message.h>
 
-static VALUE get_headers(struct stomp_ctx_message *ctx) {
-  VALUE ret = rb_hash_new();
-  const struct stomp_hdr *hdrs;
-  int i;
-
-  assert(ctx != NULL);
-
-  hdrs = ctx->hdrs;
-  for(i=0; i<ctx->hdrc; i++) {
-    rb_hash_aset(ret, rb_str_new2(hdrs[i].key), rb_str_new2(hdrs[i].val));
-  }
-
-  return ret;
-}
-
-static VALUE get_body(struct stomp_ctx_message *ctx) {
-  VALUE ret = Qnil;
-
-  assert(ctx != NULL);
-
-  if(ctx->body != NULL && ctx->body_len > 0) {
-    ret = rb_str_new2((char *)ctx->body);
-  }
-
-  return ret;
-}
+struct stomp_hdr {
+  char data[LD_MAX];
+  int len;
+};
 
 static struct stomp_hdr *make_stomp_hdr(VALUE rb_opts, int offset, int *header_len) {
   struct stomp_hdr *headers = NULL;
@@ -64,37 +47,10 @@ static struct stomp_hdr *make_stomp_hdr(VALUE rb_opts, int offset, int *header_l
     VALUE key = rb_ary_entry(entry, 0);
     VALUE val = rb_ary_entry(entry, 1);
 
-    headers[i].key = StringValueCStr(key);
-    headers[i].val = StringValueCStr(val);
+    headers[i].len = stpring(headers[i].data, "%s:%s\n", StringValueCStr(key), StringValueCStr(val));
   }
 
   return headers;
-}
-
-static void do_newt_stomp_callback(stomp_session_t *s, void *callback_ctx, char *cb_method_name) {
-  rbnewt_context_t *rbnewt_ctx = (rbnewt_context_t *)s->ctx;
-
-  assert(rbnewt_ctx != NULL);
-  assert(cb_method_name != NULL);
-
-  if(rb_respond_to(rbnewt_ctx->callback_obj, rb_intern(cb_method_name))) {
-    VALUE header = get_headers((struct stomp_ctx_message *)callback_ctx);
-    VALUE body = get_body((struct stomp_ctx_message *)callback_ctx);
-
-    VALUE ret = rb_funcall(rbnewt_ctx->callback_obj, rb_intern(cb_method_name), 2, header, body);
-    if(TYPE(ret) == T_FALSE) {
-      s->run = 0;
-    }
-  }
-}
-void newt_stomp_callback_connected(stomp_session_t *s, void *callback_ctx, void *session_ctx) {
-  do_newt_stomp_callback(s, callback_ctx, NEWT_STOMP_CB_CONNECTED);
-}
-void newt_stomp_callback_message(stomp_session_t *s, void *callback_ctx, void *session_ctx) {
-  do_newt_stomp_callback(s, callback_ctx, NEWT_STOMP_CB_MESSAGE);
-}
-void newt_stomp_callback_error(stomp_session_t *s, void *callback_ctx, void *session_ctx) {
-  do_newt_stomp_callback(s, callback_ctx, NEWT_STOMP_CB_ERROR);
 }
 
 static char *get_str_from_hash(VALUE hash, char *key) {
@@ -121,36 +77,41 @@ static int get_int_from_hash(VALUE hash, char *key) {
 
 static VALUE newt_stomp_initialize(int argc, VALUE *argv, VALUE self) {
   stomp_session_t *session;
-  VALUE cbobj, opts;
-  char *server, *userid, *passwd, *port;
-  rbnewt_context_t *context;
+  VALUE opts;
+  char *server, *userid, *passwd;
+  int port = 0;
 
-  rb_scan_args(argc, argv, "02", &cbobj, &opts);
+  rb_scan_args(argc, argv, "01", &opts);
 
   Data_Get_Struct(self, stomp_session_t, session);
 
   // zero-set for initialization
-  server = userid = passwd = port = NULL;
+  server = userid = passwd = NULL;
 
   if(! NIL_P(opts)) {
     server = get_str_from_hash(opts, NEWT_STOMP_KEY_SERVER);
     userid = get_str_from_hash(opts, NEWT_STOMP_KEY_USERID);
     passwd = get_str_from_hash(opts, NEWT_STOMP_KEY_PASSWD);
-    port   = get_str_from_hash(opts, NEWT_STOMP_KEY_PORT);
+    port   = get_int_from_hash(opts, NEWT_STOMP_KEY_PORT);
   }
 
   // set default values
   if(server == NULL) server = NEWT_STOMP_DEFAULT_SERVER;
   if(userid == NULL) userid = NEWT_STOMP_DEFAULT_USERID;
   if(passwd == NULL) passwd = NEWT_STOMP_DEFAULT_PASSWD;
-  if(port == NULL)   port   = NEWT_STOMP_DEFAULT_PORT;
+  if(port == 0)      port   = NEWT_STOMP_DEFAULT_PORT;
 
-  // set self object to context
-  context = (rbnewt_context_t *)session->ctx;
-  context->callback_obj = cbobj;
+  if(stomp_connect(session, server, port, userid, passwd) != RET_SUCCESS) {
+    rb_raise(rb_eRuntimeError, "failed to connect server");
+  }
 
-  if(cnewt_stomp_initialize(session, server, port, userid, passwd) != RET_SUCCESS) {
-    printf("[warning] failed to connect server\n");
+  frame_t *frame = stomp_recv(session);
+  if(frame == NULL) {
+    rb_raise(rb_eRuntimeError, "failed to receive CONNECTED frame");
+  }
+
+  if(frame->cmd_len != 9 || strncmp(frame->cmd, "CONNECTED", 9) != 0) {
+    rb_raise(rb_eRuntimeError, "authentication with STOMP server is failed");
   }
 
   return self;
@@ -165,15 +126,27 @@ static VALUE newt_stomp_publish(int argc, VALUE *argv, VALUE self) {
   // initialize each rb values
   rb_scan_args(argc, argv, "21", &rb_dest, &rb_data, &rb_opts);
 
+  // retrieve stomp_session_t object
   Data_Get_Struct(self, stomp_session_t, session);
 
-  char *body = StringValuePtr(rb_data);
   // making headers
   headers = make_stomp_hdr(rb_opts, 1, &header_len);
-  headers[0].key = "destination";
-  headers[0].val = StringValuePtr(rb_dest);
+  headers[0].len = sprintf(headers[0].data, "destination:%s\n", StringValuePtr(rb_dest));
 
-  stomp_send(session, header_len, headers, body, strlen(body));
+  // sending processing (send STOMP command)
+  conn_send(session->conn, "SEND\n", 5);
+
+  // sending processing (send headres)
+  int i;
+  for(i=0; i<header_len; i++) {
+    conn_send(session->conn, headers[i].data, headers[i].len);
+  }
+  conn_send(session->conn, "\n", 1);
+
+  // sending processing (send body)
+  //char *body = StringValuePtr(rb_data);
+  conn_send(session->conn, RSTRING_PTR(rb_data), RSTRING_LEN(rb_data));
+  conn_send(session->conn, "\0", 1);
 
   free(headers);
 
@@ -183,7 +156,8 @@ static VALUE newt_stomp_publish(int argc, VALUE *argv, VALUE self) {
 static VALUE newt_stomp_subscribe(int argc, VALUE *argv, VALUE self) {
   struct stomp_hdr *headers;
   stomp_session_t *session;
-  VALUE rb_dest, rb_opts;
+  VALUE rb_dest, rb_opts, ret = Qfalse;
+  frame_t *frame;
   int header_len;
 
   // initialize each rb values
@@ -193,44 +167,58 @@ static VALUE newt_stomp_subscribe(int argc, VALUE *argv, VALUE self) {
 
   // making headers
   headers = make_stomp_hdr(rb_opts, 1, &header_len);
-  headers[0].key = "destination";
-  headers[0].val = StringValuePtr(rb_dest);
+  headers[0].len = sprintf(headers[0].data, "destination:%s\n", StringValuePtr(rb_dest));
 
-  stomp_subscribe(session, header_len, headers);
+  // make and send frame
+  frame = frame_init();
+  if(frame != NULL) {
+    frame_set_cmd(frame, "SUBSCRIBE", 9);
+
+    // set headers to frame
+    int i;
+    for(i=0; i<header_len; i++) {
+      frame_set_header(frame, headers[i].data, headers[i].len);
+    }
+
+    frame_send(frame, session->conn);
+    frame_free(frame);
+
+    ret = Qtrue;
+  }
 
   free(headers);
 
-  return self;
-}
-
-static VALUE newt_stomp_run(VALUE self) {
-  stomp_session_t *session;
-  rbnewt_context_t *context;
-
-  Data_Get_Struct(self, stomp_session_t, session);
-
-  cnewt_stomp_start(session);
-
-  return self;
+  return ret;
 }
 
 static void context_free(void *ptr) {
   stomp_session_t *session = (stomp_session_t *)ptr;
 
-  stomp_session_free(session);
+  stomp_cleanup(session);
 }
 
 static VALUE newt_stomp_alloc(VALUE klass) {
   stomp_session_t *session;
-  rbnewt_context_t *context;
   VALUE ret = Qnil;
 
-  context = (rbnewt_context_t *)malloc(sizeof(rbnewt_context_t));
-  assert(context != NULL);
-
-  session = stomp_session_new(context);
+  session = stomp_init();
   if(session != NULL) {
     ret = rb_data_object_alloc(klass, session, 0, context_free);
+  }
+
+  return ret;
+}
+
+static VALUE newt_stomp_receive(VALUE self) {
+  stomp_session_t *session;
+  frame_t *frame;
+  VALUE ret = Qnil;
+
+  Data_Get_Struct(self, stomp_session_t, session);
+
+  frame = stomp_recv(session);
+  if(frame != NULL) {
+    ret = alloc_message(frame);
   }
 
   return ret;
@@ -242,9 +230,11 @@ void Init_rbnewt(void) {
   module = rb_define_module("Newt");
   stomp_kls = rb_define_class_under(module, "STOMP", rb_cObject);
 
+  init_klass_message(module);
+
   rb_define_alloc_func(stomp_kls, newt_stomp_alloc);
   rb_define_method(stomp_kls, "initialize", newt_stomp_initialize, -1);
   rb_define_method(stomp_kls, "publish", newt_stomp_publish, -1);
   rb_define_method(stomp_kls, "subscribe", newt_stomp_subscribe, -1);
-  rb_define_method(stomp_kls, "run", newt_stomp_run, 0);
+  rb_define_method(stomp_kls, "receive", newt_stomp_receive, 0);
 }

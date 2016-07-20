@@ -4,13 +4,14 @@
 #include <stomp/stomp.h>
 #include <ruby/ruby.h>
 
-/* internal data structure to share in the session */
-typedef struct rbnewt_context_t {
-  VALUE callback_obj;
-} rbnewt_context_t;
+#define NEWT_STOMP_KEY_SERVER "server"
+#define NEWT_STOMP_KEY_USERID "userid"
+#define NEWT_STOMP_KEY_PASSWD "passwd"
+#define NEWT_STOMP_KEY_PORT "port"
 
-void newt_stomp_callback_connected(stomp_session_t *, void *, void *);
-void newt_stomp_callback_message(stomp_session_t *, void *, void *);
-void newt_stomp_callback_error(stomp_session_t *, void *, void *);
+#define NEWT_STOMP_DEFAULT_SERVER "127.0.0.1"
+#define NEWT_STOMP_DEFAULT_USERID "guest"
+#define NEWT_STOMP_DEFAULT_PASSWD "guest"
+#define NEWT_STOMP_DEFAULT_PORT 61613
 
 #endif

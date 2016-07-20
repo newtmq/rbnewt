@@ -1,63 +1,30 @@
 require 'spec_helper'
 
 describe Newt do
-  QNAME = '/queue/_rspec_qname'
-
-  class CBCheck
-    attr_reader :connected_cb_is_called, :message_cb_is_called, :error_cb_is_called
-    def initialize
-      @connected_cb_is_called = false
-      @message_cb_is_called = false
-      @error_cb_is_called = false
-    end
-
-    def cb_connected(headers, body)
-      @connected_cb_is_called = true
-    end
-    def cb_message(headers, body)
-      @message_cb_is_called = true
-      false
-    end
-    def cb_error(headers, body)
-      @error_cb_is_called = true
-      false
-    end
-  end
-
   context "case of success" do
     let(:qname) { '/queue/_rpsec_qname' }
+    let(:msg_context) { 'this is the context of sending message' }
     before :all do
-      @callback = CBCheck.new
-      @session  = Newt::STOMP.new(@callback)
+      @session  = Newt::STOMP.new()
     end
 
     it "success to open session" do
       expect(@session).not_to be_nil
     end
     it "success to send message" do
-      expect(@session.publish(qname, 'message')).not_to be_nil
+      expect(@session.publish(qname, msg_context)).not_to be_nil
     end
-    it "success to receive message" do
-      @session.subscribe(qname)
-      expect(@session.run).not_to be_nil
+    it "success to send SUBSCRIBE message" do
+      expect(@session.subscribe(qname)).to be true
     end
-    it "success to be invoked callback" do
-      expect(@callback.connected_cb_is_called).to be true
-      expect(@callback.message_cb_is_called).to be true
-      expect(@callback.error_cb_is_called).to be false
-    end
-  end
-  context "case of failed to authenticate user" do
-    before :all do
-      @callback = CBCheck.new
-      @session  = Newt::STOMP.new(@callback, :userid => 'invalid_userid', :passwd => 'invalid_passwd')
-    end
+    it "success to recv message" do
+      message = @session.receive
 
-    it "failed to open session" do
-      @session.run
-      expect(@callback.connected_cb_is_called).to be false
-      expect(@callback.message_cb_is_called).to be false
-      expect(@callback.error_cb_is_called).to be true
+      expect(message).not_to be_nil
+      expect(message.command).to match 'MESSAGE'
+      expect(message.headers).not_to be_nil
+      expect(message.body).not_to be_nil
+      expect(message.body).to match msg_context
     end
   end
 end
