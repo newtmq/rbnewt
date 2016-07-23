@@ -10,11 +10,10 @@
 #include <stomp/stomp.h>
 #include <stomp/frame.h>
 
-#include <newt/stomp_manager.h>
 #include <newt/message.h>
 #include <newt/rbnewt.h>
 
-#define DEFAULT_CONCURRENCY 1
+#define CONNECT_TIMEOUT (3)
 
 struct stomp_hdr {
   char data[LD_MAX];
@@ -79,14 +78,14 @@ static int get_int_from_hash(VALUE hash, char *key) {
 }
 
 static VALUE newt_stomp_initialize(int argc, VALUE *argv, VALUE self) {
-  stomp_manager_t *manager;
+  stomp_session_t *session;
   VALUE opts;
   char *server, *userid, *passwd;
   int port = 0;
 
   rb_scan_args(argc, argv, "01", &opts);
 
-  Data_Get_Struct(self, stomp_manager_t, manager);
+  Data_Get_Struct(self, stomp_session_t, session);
 
   // zero-set for initialization
   server = userid = passwd = NULL;
@@ -104,12 +103,11 @@ static VALUE newt_stomp_initialize(int argc, VALUE *argv, VALUE self) {
   if(passwd == NULL) passwd = NEWT_STOMP_DEFAULT_PASSWD;
   if(port == 0)      port   = NEWT_STOMP_DEFAULT_PORT;
 
-  if(stomp_worker_start(manager, server, port, userid, passwd) != RET_SUCCESS) {
+  if(stomp_connect(session, server, port, userid, passwd) != RET_SUCCESS) {
     rb_raise(rb_eRuntimeError, "failed to connect server");
   }
 
-  /*
-  frame_t *frame = stomp_manager_recv(manager);
+  frame_t *frame = stomp_recv_with_timeout(session, CONNECT_TIMEOUT);
   if(frame == NULL) {
     rb_raise(rb_eRuntimeError, "failed to receive CONNECTED frame");
   }
@@ -117,28 +115,26 @@ static VALUE newt_stomp_initialize(int argc, VALUE *argv, VALUE self) {
   if(frame->cmd_len != 9 || strncmp(frame->cmd, "CONNECTED", 9) != 0) {
     rb_raise(rb_eRuntimeError, "authentication with STOMP server is failed");
   }
-  */
 
   return self;
 }
 
 static VALUE newt_stomp_publish(int argc, VALUE *argv, VALUE self) {
   struct stomp_hdr *headers;
-  stomp_manager_t *manager;
+  stomp_session_t *session;
   VALUE rb_dest, rb_data, rb_opts;
   int header_len;
 
   // initialize each rb values
   rb_scan_args(argc, argv, "21", &rb_dest, &rb_data, &rb_opts);
 
-  // retrieve stomp_manager_t object
-  Data_Get_Struct(self, stomp_manager_t, manager);
+  // retrieve stomp_session_t object
+  Data_Get_Struct(self, stomp_session_t, session);
 
   // making headers
   headers = make_stomp_hdr(rb_opts, 1, &header_len);
   headers[0].len = sprintf(headers[0].data, "destination:%s\n", StringValuePtr(rb_dest));
 
-  /*
   // sending processing (send STOMP command)
   conn_send(session->conn, "SEND\n", 5);
 
@@ -150,28 +146,8 @@ static VALUE newt_stomp_publish(int argc, VALUE *argv, VALUE self) {
   conn_send(session->conn, "\n", 1);
 
   // sending processing (send body)
-  //char *body = StringValuePtr(rb_data);
   conn_send(session->conn, RSTRING_PTR(rb_data), RSTRING_LEN(rb_data));
   conn_send(session->conn, "\0", 1);
-  */
-
-  // make and send frame
-  frame_t *frame = frame_init();
-  if(frame != NULL) {
-    frame_set_cmd(frame, "SEND", 4);
-
-    // set headers to frame
-    int i;
-    for(i=0; i<header_len; i++) {
-      frame_set_header(frame, headers[i].data, headers[i].len);
-    }
-
-    // set body data to frame
-    char *body = StringValuePtr(rb_data);
-    frame_set_body(frame, body, strlen(body));
-
-    stomp_manager_send(manager, frame);
-  }
 
   free(headers);
 
@@ -180,68 +156,61 @@ static VALUE newt_stomp_publish(int argc, VALUE *argv, VALUE self) {
 
 static VALUE newt_stomp_subscribe(int argc, VALUE *argv, VALUE self) {
   struct stomp_hdr *headers;
-  stomp_manager_t *manager;
-  VALUE rb_dest, rb_opts, ret = Qfalse;
+  stomp_session_t *session;
+  VALUE rb_dest, rb_opts;
   frame_t *frame;
   int header_len;
 
   // initialize each rb values
   rb_scan_args(argc, argv, "11", &rb_dest, &rb_opts);
 
-  Data_Get_Struct(self, stomp_manager_t, manager);
+  Data_Get_Struct(self, stomp_session_t, session);
 
   // making headers
   headers = make_stomp_hdr(rb_opts, 1, &header_len);
   headers[0].len = sprintf(headers[0].data, "destination:%s\n", StringValuePtr(rb_dest));
 
-  // make and send frame
-  frame = frame_init();
-  if(frame != NULL) {
-    frame_set_cmd(frame, "SUBSCRIBE", 9);
+  // sending processing (send STOMP command)
+  conn_send(session->conn, "SUBSCRIBE\n", 10);
 
-    // set headers to frame
-    int i;
-    for(i=0; i<header_len; i++) {
-      frame_set_header(frame, headers[i].data, headers[i].len);
-    }
-
-    stomp_manager_send(manager, frame);
-
-    ret = Qtrue;
+  // sending processing (send headres)
+  int i;
+  for(i=0; i<header_len; i++) {
+    conn_send(session->conn, headers[i].data, headers[i].len);
   }
+  conn_send(session->conn, "\n\0", 2);
 
   free(headers);
 
-  return ret;
+  return Qtrue;
 }
 
 static void context_free(void *ptr) {
-  stomp_manager_t *manager = (stomp_manager_t *)ptr;
+  stomp_session_t *session = (stomp_session_t *)ptr;
 
-  stomp_worker_stop(manager);
-  stomp_manager_cleanup(manager);
+  stomp_cleanup(session);
 }
 
 static VALUE newt_stomp_alloc(VALUE klass) {
-  stomp_manager_t *manager;
+  stomp_session_t *session;
   VALUE ret = Qnil;
 
-  manager = stomp_manager_init(DEFAULT_CONCURRENCY);
-  if(manager != NULL) {
-    ret = rb_data_object_alloc(klass, manager, 0, context_free);
+  session = stomp_init();
+  if(session != NULL) {
+    ret = rb_data_object_alloc(klass, session, 0, context_free);
   }
 
   return ret;
 }
 
 static VALUE newt_stomp_receive(VALUE self) {
-  stomp_manager_t *manager;
+  stomp_session_t *session;
   frame_t *frame;
 
-  Data_Get_Struct(self, stomp_manager_t, manager);
+  Data_Get_Struct(self, stomp_session_t, session);
 
   do {
-    frame = stomp_manager_recv(manager);
+    frame = stomp_recv(session);
   } while(frame == NULL);
 
   return alloc_message(frame);
